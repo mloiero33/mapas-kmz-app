@@ -1,191 +1,161 @@
+import json
 import os
-import tempfile
-import zipfile
 
 import folium
-import geopandas as gpd
 import streamlit as st
 from streamlit_folium import st_folium
 
 
-# =========================
-# Configuración general
-# =========================
 st.set_page_config(
-    page_title="Visor de mapas KMZ",
+    page_title="Visor de mapas",
     layout="wide",
 )
 
-KMZ_FOLDER = "kmz"
+GEOJSON_FOLDER = "geojson"
 
 
-# =========================
-# Funciones auxiliares
-# =========================
 @st.cache_data
-def listar_kmz(carpeta: str) -> list[str]:
-    archivos = [
-        f for f in os.listdir(carpeta)
-        if f.lower().endswith(".kmz")
-    ]
+def listar_geojson(carpeta):
+    archivos = [f for f in os.listdir(
+        carpeta) if f.lower().endswith(".geojson")]
     archivos.sort()
     return archivos
 
 
 @st.cache_data
-def extraer_kml_desde_kmz(kmz_path: str) -> str:
-    """
-    Extrae temporalmente el contenido del KMZ y devuelve la ruta del primer KML encontrado.
-    """
-    temp_dir = tempfile.mkdtemp()
-
-    with zipfile.ZipFile(kmz_path, "r") as z:
-        z.extractall(temp_dir)
-
-    for root, _, files in os.walk(temp_dir):
-        for file in files:
-            if file.lower().endswith(".kml"):
-                return os.path.join(root, file)
-
-    raise FileNotFoundError(
-        "No se encontró ningún archivo KML dentro del KMZ.")
+def cargar_geojson(ruta):
+    with open(ruta, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 
-@st.cache_data
-def leer_kmz(kmz_path: str) -> gpd.GeoDataFrame:
-    """
-    Lee un KMZ y devuelve un GeoDataFrame en EPSG:4326.
-    """
-    kml_path = extraer_kml_desde_kmz(kmz_path)
-    gdf = gpd.read_file(kml_path)
+def obtener_bounds(data):
+    coords = []
 
-    if gdf.empty:
-        return gdf
+    def recorrer(obj):
+        if isinstance(obj, list):
+            if (
+                len(obj) >= 2
+                and isinstance(obj[0], (int, float))
+                and isinstance(obj[1], (int, float))
+            ):
+                coords.append((obj[1], obj[0]))  # lat, lon
+            else:
+                for item in obj:
+                    recorrer(item)
 
-    if gdf.crs is None:
-        gdf = gdf.set_crs(epsg=4326, allow_override=True)
-    else:
-        gdf = gdf.to_crs(epsg=4326)
+    for feature in data.get("features", []):
+        geometry = feature.get("geometry")
+        if geometry and "coordinates" in geometry:
+            recorrer(geometry["coordinates"])
 
-    return gdf
+    if not coords:
+        return None
 
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
 
-def obtener_centro(gdf: gpd.GeoDataFrame) -> tuple[float, float]:
-    """
-    Calcula el centro aproximado del GeoDataFrame.
-    """
-    minx, miny, maxx, maxy = gdf.total_bounds
-    lat = (miny + maxy) / 2
-    lon = (minx + maxx) / 2
-    return lat, lon
+    return [[min(lats), min(lons)], [max(lats), max(lons)]]
 
 
-def elegir_campos_mostrar(gdf: gpd.GeoDataFrame, max_campos: int = 5) -> list[str]:
-    """
-    Elige columnas útiles para tooltip/popup, excluyendo geometry.
-    """
-    columnas = [c for c in gdf.columns if c != "geometry"]
-    return columnas[:max_campos]
+def obtener_campos_popup(features, max_campos=12):
+    if not features:
+        return []
+
+    props = features[0].get("properties", {})
+    # Tomamos todas las claves no vacías
+    campos = [k for k in props.keys() if k]
+    return campos[:max_campos]
 
 
 def estilo_geojson(feature):
+    geometry = feature.get("geometry", {})
+    geom_type = geometry.get("type", "")
+
+    if geom_type in ["LineString", "MultiLineString"]:
+        return {
+            "color": "#ff0000",
+            "weight": 8,
+            "opacity": 1,
+        }
+
     return {
-        "fillColor": "#F0070B",
-        "color": "#B90606",
-        "weight": 4,
-        "fillOpacity": 0.40,
+        "fillColor": "#ff0000",
+        "color": "#000000",
+        "weight": 6,
+        "fillOpacity": 0.80,
     }
 
 
-# =========================
-# Interfaz
-# =========================
-st.title("Visor de mapas KMZ")
-st.caption("Abrí cualquiera de tus mapas desde el celular o la PC.")
+st.title("Visor de mapas")
+st.caption("Abrí tus mapas desde celular o PC")
 
-if not os.path.exists(KMZ_FOLDER):
-    st.error(f"No existe la carpeta '{KMZ_FOLDER}'.")
+if not os.path.exists(GEOJSON_FOLDER):
+    st.error("No existe la carpeta 'geojson'")
     st.stop()
 
-archivos_kmz = listar_kmz(KMZ_FOLDER)
+archivos = listar_geojson(GEOJSON_FOLDER)
 
-if not archivos_kmz:
-    st.warning("No se encontraron archivos .kmz en la carpeta.")
+if not archivos:
+    st.warning("No se encontraron archivos .geojson")
     st.stop()
 
-# Selector simple, ideal para celular
-archivo_seleccionado = st.selectbox(
-    "Elegí un mapa",
-    archivos_kmz,
-    index=0,
+archivo = st.selectbox("Elegí un mapa", archivos)
+
+ruta = os.path.join(GEOJSON_FOLDER, archivo)
+data = cargar_geojson(ruta)
+features = data.get("features", [])
+
+if not features:
+    st.warning("Este archivo no contiene geometrías visibles.")
+    st.stop()
+
+campos = obtener_campos_popup(features)
+
+m = folium.Map(
+    control_scale=True,
+    tiles="OpenStreetMap",
 )
 
-ruta_kmz = os.path.join(KMZ_FOLDER, archivo_seleccionado)
+folium.GeoJson(
+    data,
+    name=archivo,
+    style_function=estilo_geojson,
+    highlight_function=lambda x: {
+        "weight": 8,
+        "fillOpacity": 0.95,
+        "color": "#ffffff",
+    },
+    tooltip=folium.GeoJsonTooltip(
+        fields=campos,
+        aliases=[f"{c}:" for c in campos],
+        localize=True,
+        sticky=True,
+        labels=True,
+    ) if campos else None,
+    popup=folium.GeoJsonPopup(
+        fields=campos,
+        aliases=[f"{c}:" for c in campos],
+        localize=True,
+        labels=True,
+        style="""
+            background-color: white;
+            border: 2px solid #333333;
+            border-radius: 8px;
+            box-shadow: 3px;
+        """,
+    ) if campos else None,
+).add_to(m)
 
-# Opciones simples
-with st.expander("Opciones"):
-    mostrar_tooltip = st.checkbox("Mostrar nombres al pasar/tocar", value=True)
-    zoom_inicial = st.slider(
-        "Zoom inicial", min_value=5, max_value=16, value=11)
+bounds = obtener_bounds(data)
+if bounds:
+    m.fit_bounds(bounds)
 
-# =========================
-# Cargar mapa
-# =========================
-try:
-    gdf = leer_kmz(ruta_kmz)
+folium.LayerControl().add_to(m)
 
-    if gdf.empty:
-        st.warning("Este KMZ no contiene geometrías visibles.")
-        st.stop()
-
-    lat, lon = obtener_centro(gdf)
-    campos = elegir_campos_mostrar(gdf, max_campos=8)
-
-    m = folium.Map(
-        location=[lat, lon],
-        zoom_start=zoom_inicial,
-        control_scale=True,
-        tiles="OpenStreetMap",
-    )
-
-    geojson_kwargs = {
-        "data": gdf,
-        "name": archivo_seleccionado,
-        "style_function": estilo_geojson,
-        "highlight_function": lambda x: {
-            "weight": 4,
-            "fillOpacity": 0.45,
-        },
-    }
-
-    if mostrar_tooltip and campos:
-        geojson_kwargs["tooltip"] = folium.GeoJsonTooltip(
-            fields=campos,
-            aliases=[f"{c}:" for c in campos],
-            localize=True,
-            sticky=False,
-            labels=True,
-        )
-
-    if campos:
-        geojson_kwargs["popup"] = folium.GeoJsonPopup(
-            fields=campos,
-            aliases=[f"{c}:" for c in campos],
-            localize=True,
-            labels=True,
-        )
-
-    folium.GeoJson(**geojson_kwargs).add_to(m)
-    folium.LayerControl().add_to(m)
-
-    st_folium(
-        m,
-        width=None,
-        height=600,
-        returned_objects=[],
-        use_container_width=True,
-    )
-
-except Exception as e:
-    st.error(f"No se pudo abrir el archivo '{archivo_seleccionado}'.")
-    st.exception(e)
+st_folium(
+    m,
+    width=None,
+    height=650,
+    returned_objects=[],
+    use_container_width=True,
+)

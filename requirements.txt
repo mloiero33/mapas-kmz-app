@@ -1,8 +1,3 @@
-streamlit
-folium
-streamlit-folium
-geopandas
-fiona
-pyogrio
-shapely
-lxml
+streamlit==1.55.0
+folium==0.20.0
+streamlit-folium==0.26.2
