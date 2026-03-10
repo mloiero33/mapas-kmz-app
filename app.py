@@ -4,6 +4,8 @@ import os
 import folium
 import streamlit as st
 from streamlit_folium import st_folium
+from folium.features import DivIcon
+from folium import Marker
 
 
 st.set_page_config(
@@ -86,6 +88,71 @@ def estilo_geojson(feature):
     }
 
 
+def agregar_marcadores_con_numeros(mapa, data, campo_nombre="Name"):
+    """
+    Agrega marcadores circulares con números para cada punto en el GeoJSON
+    """
+    features = data.get("features", [])
+    
+    for i, feature in enumerate(features, 1):
+        geometry = feature.get("geometry", {})
+        properties = feature.get("properties", {})
+        
+        if geometry.get("type") in ["Point", "MultiPoint"]:
+            coords = geometry.get("coordinates")
+            
+            # Obtener el nombre del punto
+            nombre_punto = properties.get(campo_nombre, f"Punto {i}")
+            
+            # Si es MultiPoint, procesar cada punto
+            if geometry.get("type") == "MultiPoint":
+                for punto in coords:
+                    crear_marcador(mapa, punto, nombre_punto)
+            else:
+                crear_marcador(mapa, coords, nombre_punto)
+
+
+def crear_marcador(mapa, coords, texto):
+    """
+    Crea un marcador circular con texto
+    """
+    # Invertir coordenadas de [lon, lat] a [lat, lon] para folium
+    lat, lon = coords[1], coords[0]
+    
+    # Limitar el texto a 3 caracteres para que entre en el círculo
+    texto_corto = str(texto)[:3] if len(str(texto)) > 3 else str(texto)
+    
+    # Crear un marcador personalizado con número
+    Marker(
+        location=[lat, lon],
+        icon=DivIcon(
+            icon_size=(30, 30),
+            icon_anchor=(15, 15),
+            html=f'''
+                <div style="
+                    background-color: #ff4d4d;
+                    border-radius: 50%;
+                    width: 30px;
+                    height: 30px;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    color: white;
+                    font-weight: bold;
+                    font-size: 14px;
+                    border: 2px solid white;
+                    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
+                    cursor: pointer;
+                ">
+                    {texto_corto}
+                </div>
+            '''
+        ),
+        popup=texto,
+        tooltip=texto
+    ).add_to(mapa)
+
+
 st.title("Visor de mapas")
 st.caption("Abrí tus mapas desde celular o PC")
 
@@ -116,6 +183,7 @@ m = folium.Map(
     tiles="OpenStreetMap",
 )
 
+# Agregar las geometrías (líneas, polígonos)
 folium.GeoJson(
     data,
     name=archivo,
@@ -145,6 +213,9 @@ folium.GeoJson(
         """,
     ) if campos else None,
 ).add_to(m)
+
+# Agregar marcadores con números para los puntos (checkpoints)
+agregar_marcadores_con_numeros(m, data, campo_nombre="Name")
 
 bounds = obtener_bounds(data)
 if bounds:
